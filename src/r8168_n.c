@@ -30959,13 +30959,18 @@ rtl8168_unmap_tx_skb(struct pci_dev *pdev,
                      struct TxDesc *desc)
 {
         unsigned int len = tx_skb->len;
+        dma_addr_t addr = (dma_addr_t)le64_to_cpu(desc->addr);
 
-        dma_unmap_single(&pdev->dev, le64_to_cpu(desc->addr), len, DMA_TO_DEVICE);
+        if (tx_skb->mapped_page)
+                dma_unmap_page(&pdev->dev, addr, len, DMA_TO_DEVICE);
+        else
+                dma_unmap_single(&pdev->dev, addr, len, DMA_TO_DEVICE);
 
         desc->opts1 = cpu_to_le32(RTK_MAGIC_DEBUG_VALUE);
         desc->opts2 = 0x00;
         desc->addr = 0x00;
         tx_skb->len = 0;
+        tx_skb->mapped_page = 0;
 }
 
 static void
@@ -31352,19 +31357,23 @@ rtl8168_xmit_frags(struct rtl8168_private *tp,
                 skb_frag_t *frag = info->frags + cur_frag;
                 dma_addr_t mapping;
                 u32 status, len;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,2,0)
                 void *addr;
+#endif
 
                 entry = (entry + 1) % ring->num_tx_desc;
 
                 txd = ring->TxDescArray + entry;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,2,0)
                 len = frag->size;
-                addr = ((void *) page_address(frag->page)) + frag->page_offset;
+                mapping = dma_map_page(tp_to_dev(tp), frag->page,
+                                       frag->page_offset, len, DMA_TO_DEVICE);
 #else
                 len = skb_frag_size(frag);
                 addr = skb_frag_address(frag);
+                mapping = dma_map_single(tp_to_dev(tp), addr, len,
+                                         DMA_TO_DEVICE);
 #endif
-                mapping = dma_map_single(tp_to_dev(tp), addr, len, DMA_TO_DEVICE);
 
                 if (unlikely(dma_mapping_error(tp_to_dev(tp), mapping))) {
                         if (unlikely(net_ratelimit()))
@@ -31372,6 +31381,12 @@ rtl8168_xmit_frags(struct rtl8168_private *tp,
                                           "Failed to map TX fragments DMA!\n");
                         goto err_out;
                 }
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,2,0)
+                ring->tx_skb[entry].mapped_page = 1;
+#else
+                ring->tx_skb[entry].mapped_page = 0;
+#endif
 
                 /* anti gcc 2.95.3 bugware (sic) */
                 status = rtl8168_get_txd_opts1(ring, opts[0], len, entry);
@@ -31698,6 +31713,7 @@ rtl8168_start_xmit(struct sk_buff *skb,
         }
         /* set first fragment's length */
         ring->tx_skb[entry].len = len;
+        ring->tx_skb[entry].mapped_page = 0;
 
         /* set skb to last fragment */
         last_entry = (entry + frags) % ring->num_tx_desc;

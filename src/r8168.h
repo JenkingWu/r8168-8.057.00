@@ -371,9 +371,11 @@ do { \
 #define PCI_VENDOR_ID_DLINK 0x1186
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,0)
 #ifndef dma_mapping_error
 #define dma_mapping_error(a,b) 0
 #endif
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(2,6,0) */
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,34)
 #define rtl_dma_set_coherent_mask(pdev, mask) \
@@ -1745,6 +1747,7 @@ struct ring_info {
         u32     len;
         unsigned int   bytecount;
         unsigned short gso_segs;
+        u8      mapped_page;
         u8      __pad[sizeof(void *) - sizeof(u32)];
 };
 
