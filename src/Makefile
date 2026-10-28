@@ -53,6 +53,10 @@ ENABLE_GIGA_LITE = y
 ifneq ($(KERNELRELEASE),)
 	obj-m := r8168.o
 	r8168-objs := r8168_n.o r8168_asf.o rtl_eeprom.o rtltool.o
+	# CentOS/RHEL 6 backports several 3.x APIs while reporting 2.6.32.
+	ifeq ($(shell echo $(KERNELRELEASE) | grep -c '\.el6\.'),1)
+		EXTRA_CFLAGS += -DCONFIG_R8168_RHEL6
+	endif
 	ifeq ($(CONFIG_SOC_LAN), y)
 		EXTRA_CFLAGS += -DCONFIG_SOC_LAN
 	endif

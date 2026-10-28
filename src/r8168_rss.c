@@ -33,6 +33,7 @@
  ***********************************************************************************/
 
 #include <linux/version.h>
+#include <linux/delay.h>
 #include "r8168.h"
 
 enum rtl8168_rss_register_content {

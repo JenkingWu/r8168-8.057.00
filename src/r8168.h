@@ -57,10 +57,12 @@
 #endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,3,0)
+#ifndef netif_xmit_stopped
 #define netif_xmit_stopped netif_tx_queue_stopped
+#endif
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3,3,0) */
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,7,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,7,0) && !defined(CONFIG_R8168_RHEL6)
 #ifndef MDIO_AN_EEE_ADV_100TX
 #define MDIO_AN_EEE_ADV_100TX	0x0002	/* Advertise 100TX EEE cap */
 #endif
@@ -120,7 +122,7 @@ static inline u16 ethtool_adv_to_mmd_eee_adv_t(u32 adv)
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4,3,0)
 static inline
-ssize_t strscpy(char *dest, const char *src, size_t count)
+ssize_t rtl8168_strscpy(char *dest, const char *src, size_t count)
 {
         long res = 0;
 
@@ -144,6 +146,9 @@ ssize_t strscpy(char *dest, const char *src, size_t count)
 
         return -E2BIG;
 }
+#ifndef strscpy
+#define strscpy rtl8168_strscpy
+#endif
 #endif
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(4,6,0))
@@ -157,7 +162,7 @@ static inline unsigned char *skb_checksum_start(const struct sk_buff *skb)
 }
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,3,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,3,0) && !defined(CONFIG_R8168_RHEL6)
 static inline void netdev_tx_sent_queue(struct netdev_queue *dev_queue,
                                         unsigned int bytes)
 {}
@@ -171,12 +176,24 @@ static inline void netdev_tx_reset_queue(struct netdev_queue *q) {}
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,8,0)
 static inline void fsleep(unsigned long usecs)
 {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36)
         if (usecs <= 10)
                 udelay(usecs);
         else if (usecs <= 20000)
                 usleep_range(usecs, 2 * usecs);
         else
                 msleep(DIV_ROUND_UP(usecs, 1000));
+#else
+        /*
+         * usleep_range() was added in 2.6.36.  On older kernels use a
+         * short busy wait for sub-millisecond delays and msleep()
+         * otherwise; all fsleep() call sites are in sleepable context.
+         */
+        if (usecs < 1000)
+                udelay(usecs);
+        else
+                msleep(DIV_ROUND_UP(usecs, 1000));
+#endif
 }
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(5,8,0) */
 
@@ -201,43 +218,14 @@ typedef int netdev_tx_t;
 #define device_set_wakeup_enable(dev, val)	do {} while (0)
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,14,0)
-static inline void ether_addr_copy(u8 *dst, const u8 *src)
-{
-        u16 *a = (u16 *)dst;
-        const u16 *b = (const u16 *)src;
-
-        a[0] = b[0];
-        a[1] = b[1];
-        a[2] = b[2];
-}
-#endif
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,15,0)
-#define IS_ERR_OR_NULL(ptr)			(!ptr)
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,13,0)
-#define reinit_completion(x)			((x)->done = 0)
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,39)
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
-#define pm_runtime_mark_last_busy(x)
-#define pm_runtime_put_autosuspend(x)		pm_runtime_put(x)
-#define pm_runtime_put_sync_autosuspend(x)	pm_runtime_put_sync(x)
-
-static inline bool pm_runtime_suspended(struct device *dev)
-{
-        return dev->power.runtime_status == RPM_SUSPENDED
-               && !dev->power.disable_depth;
-}
-
-static inline bool pm_runtime_active(struct device *dev)
-{
-        return dev->power.runtime_status == RPM_ACTIVE
-               || dev->power.disable_depth;
-}
-#endif
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,36)
+#ifndef queue_delayed_work
 #define queue_delayed_work(long_wq, work, delay)	schedule_delayed_work(work, delay)
+#endif
+#endif
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,34)
+#if !defined(netif_printk) && !defined(netif_err)
 #define netif_printk(priv, type, level, netdev, fmt, args...)	\
 	do {								\
 		if (netif_msg_##type(priv))				\
@@ -258,11 +246,8 @@ static inline bool pm_runtime_active(struct device *dev)
 		netif_printk(priv, type, KERN_NOTICE, netdev, fmt, ##args)
 #define netif_info(priv, type, netdev, fmt, args...)		\
 		netif_printk(priv, type, KERN_INFO, (netdev), fmt, ##args)
-#endif
-#endif
-#endif
-#endif
-#endif
+#endif /* !netif_printk && !netif_err */
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(2,6,34) */
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,15)
 #define setup_timer(_timer, _function, _data) \
@@ -293,8 +278,10 @@ do { \
 #endif
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,6,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,6,0) && !defined(CONFIG_R8168_RHEL6)
+#ifndef eth_random_addr
 #define eth_random_addr(addr) random_ether_addr(addr)
+#endif
 #endif //LINUX_VERSION_CODE < KERNEL_VERSION(3,6,0)
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,3,0)
@@ -349,8 +336,11 @@ do { \
 #define NETIF_F_RXFCS  0
 #endif
 
-#if !defined(HAVE_FREE_NETDEV) && (LINUX_VERSION_CODE < KERNEL_VERSION(3,1,0))
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,0)
 #define free_netdev(x)  kfree(x)
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,1,0)
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,27)
 #define RTL_NAPI_DEL(priv)
 #else
@@ -385,8 +375,34 @@ do { \
 #define dma_mapping_error(a,b) 0
 #endif
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,34)
+#define rtl_dma_set_coherent_mask(pdev, mask) \
+        dma_set_coherent_mask(&(pdev)->dev, (mask))
+#else
+#define rtl_dma_set_coherent_mask(pdev, mask) \
+        pci_set_consistent_dma_mask((pdev), (mask))
+#endif
+
 #ifndef netif_err
 #define netif_err(a,b,c,d)
+#endif
+
+#ifndef netdev_err
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,0)
+#define netdev_err(dev, fmt, args...)   dev_err(&(dev)->dev, fmt, ##args)
+#else
+#define netdev_err(dev, fmt, args...)   printk(fmt, ##args)
+#endif
+#endif
+
+#ifndef clamp_val
+#define clamp_val(val, lo, hi) ({ \
+        typeof(val) __val = (val); \
+        typeof(val) __lo = (lo); \
+        typeof(val) __hi = (hi); \
+        __val = __val < __lo ? __lo : __val; \
+        __val = __val > __hi ? __hi : __val; \
+        __val; })
 #endif
 
 #ifndef AUTONEG_DISABLE
@@ -1993,7 +2009,7 @@ struct rtl8168_counters {
 };
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,6,0)
-struct ethtool_eee {
+struct rtl8168_ethtool_eee {
         __u32	cmd;
         __u32	supported;
         __u32	advertised;
@@ -2004,6 +2020,9 @@ struct ethtool_eee {
         __u32	tx_lpi_timer;
         __u32	reserved[2];
 };
+#ifndef ethtool_eee
+#define ethtool_eee rtl8168_ethtool_eee
+#endif
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3,6,0) */
 
 struct rtl8168_private {
@@ -2658,11 +2677,13 @@ static inline void rtl8168_lib_reset_complete(struct rtl8168_private *tp) { }
 #define HW_SUPPORT_UPS_MODE(_M)        ((_M)->HwSuppUpsVer > 0)
 #define HW_RSS_SUPPORT_RSS(_M)        ((_M)->HwSuppRssVer > 0)
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,34)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,34) && !defined(CONFIG_R8168_RHEL6)
+#ifndef netdev_mc_count
 #define netdev_mc_count(dev) ((dev)->mc_count)
 #define netdev_mc_empty(dev) (netdev_mc_count(dev) == 0)
 #define netdev_for_each_mc_addr(mclist, dev) \
     for (mclist = dev->mc_list; mclist; mclist = mclist->next)
+#endif /* netdev_mc_count */
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(2,6,34) */
 
 #endif /* R8168_H */

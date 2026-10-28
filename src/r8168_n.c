@@ -75,6 +75,7 @@
 #else
 #include <linux/dma-mapping.h>
 #include <linux/moduleparam.h>
+#include <linux/log2.h>
 #endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,31)
@@ -708,7 +709,7 @@ bool ethtool_convert_link_mode_to_legacy_u32(u32 *legacy_u32,
 }
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,3,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,3,0) && !defined(CONFIG_R8168_RHEL6)
 
 #ifndef LPA_1000FULL
 #define LPA_1000FULL            0x0800
@@ -762,7 +763,7 @@ static inline u32 mii_stat1000_to_ethtool_lpa_t(u32 lpa)
 
 #endif //LINUX_VERSION_CODE < KERNEL_VERSION(3,3,0)
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,4,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,4,0) && !defined(CONFIG_R8168_RHEL6)
 static inline void eth_hw_addr_random(struct net_device *dev)
 {
         random_ether_addr(dev->dev_addr);
@@ -1692,8 +1693,8 @@ static int proc_dump_rx_desc_2(struct seq_file *m, void *v)
                         for (i=0; i<(tp->RxDescLength/4); i++) {
                                 if (!(i % 4))
                                         seq_printf(m, "\n%04llx ",
-                                                   ((u64)pdword + (i * 4) -
-                                                    (u64)tp->RxDescArray));
+                                                   ((u64)(unsigned long)pdword + (i * 4) -
+                                                    (u64)(unsigned long)tp->RxDescArray));
                                 seq_printf(m, "%08x ", pdword[i]);
                         }
                 }
@@ -2542,8 +2543,8 @@ static int proc_dump_rx_desc_2(char *page, char **start,
                                 if (!(i % 4))
                                         len += snprintf(page + len, count - len,
                                                         "\n%04llx ",
-                                                        ((u64)pdword + (i * 4) -
-                                                         (u64)tp->RxDescArray));
+                                                        ((u64)(unsigned long)pdword + (i * 4) -
+                                                         (u64)(unsigned long)tp->RxDescArray));
                                 len += snprintf(page + len, count - len,
                                                 "%08x ",
                                                 pdword[i]);
@@ -27133,7 +27134,9 @@ rtl8168_get_mac_address(struct net_device *dev)
                 netif_err(tp, probe, dev, "Invalid ether addr %pM\n",
                           mac_addr);
                 eth_random_addr(mac_addr);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36)
                 dev->addr_assign_type = NET_ADDR_RANDOM;
+#endif
                 netif_info(tp, probe, dev, "Random ether addr %pM\n",
                            mac_addr);
                 tp->random_mac = 1;
@@ -28240,7 +28243,7 @@ rtl8168_init_board(struct pci_dev *pdev,
         if ((sizeof(dma_addr_t) > 4) &&
             tp->use_dac &&
             !dma_set_mask(&pdev->dev, DMA_BIT_MASK(64)) &&
-            !dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(64))) {
+            !rtl_dma_set_coherent_mask(pdev, DMA_BIT_MASK(64))) {
                 dev->features |= NETIF_F_HIGHDMA;
         } else {
                 rc = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
@@ -28518,8 +28521,9 @@ rtl8168_link_timer(struct timer_list *t)
 
 #ifndef ENABLE_RSS_SUPPORT
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,14,0)
-static int pci_enable_msix_range(struct pci_dev *dev, struct msix_entry *entries,
-                                 int minvec, int maxvec)
+static int rtl8168_pci_enable_msix_range(struct pci_dev *dev,
+                                         struct msix_entry *entries,
+                                         int minvec, int maxvec)
 {
         int nvec = maxvec;
         int rc;
@@ -28540,6 +28544,9 @@ static int pci_enable_msix_range(struct pci_dev *dev, struct msix_entry *entries
 
         return nvec;
 }
+#else
+#define rtl8168_pci_enable_msix_range(dev, entries, minvec, maxvec) \
+        pci_enable_msix_range((dev), (entries), (minvec), (maxvec))
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3,14,0) */
 
 static int rtl8168_enable_msix(struct rtl8168_private *tp)
@@ -28554,8 +28561,9 @@ static int rtl8168_enable_msix(struct rtl8168_private *tp)
                 msix_ent[i].vector = 0;
         }
 
-        nvecs = pci_enable_msix_range(tp->pci_dev, msix_ent,
-                                      tp->min_irq_nvecs, tp->max_irq_nvecs);
+        nvecs = rtl8168_pci_enable_msix_range(tp->pci_dev, msix_ent,
+                                              tp->min_irq_nvecs,
+                                              tp->max_irq_nvecs);
         if (nvecs < 0)
                 goto out;
 
@@ -28797,15 +28805,31 @@ rtl8168_set_real_num_queue(struct rtl8168_private *tp)
 {
         int retval = 0;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,37)
+        if (tp->num_tx_rings > tp->dev->num_tx_queues)
+                tp->num_tx_rings = tp->dev->num_tx_queues;
+
         retval = netif_set_real_num_tx_queues(tp->dev, tp->num_tx_rings);
         if (retval < 0)
-                goto exit;
+                return retval;
 
         retval = netif_set_real_num_rx_queues(tp->dev, tp->num_rx_rings);
         if (retval < 0)
-                goto exit;
+                return retval;
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,27)
+        /*
+         * 2.6.27..2.6.36 have real_num_tx_queues but no
+         * netif_set_real_num_*() helpers.  This runs before
+         * register_netdev(), so no qdisc reset is required.
+         */
+        if (tp->num_tx_rings > tp->dev->num_tx_queues)
+                tp->num_tx_rings = tp->dev->num_tx_queues;
+        tp->dev->real_num_tx_queues = tp->num_tx_rings;
+        retval = 0;
+#else
+        retval = 0;
+#endif
 
-exit:
         return retval;
 }
 
