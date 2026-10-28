@@ -4,6 +4,13 @@
 # invoke insmod with all arguments we got
 # and use a pathname, as insmod doesn't look in . by default
 
+# On CentOS/RHEL 6 use the dedicated installer: it keeps the in-tree
+# r8169 module in place, blacklists it, and updates dracut/initramfs.
+if [ -r /etc/redhat-release ] && grep -qi "release 6" /etc/redhat-release; then
+        echo "CentOS/RHEL 6 detected: use ./el6/install.sh instead of autorun.sh."
+        exit 1
+fi
+
 TARGET_PATH=$(find /lib/modules/$(uname -r)/kernel/drivers/net/ethernet -name realtek -type d)
 if [ "$TARGET_PATH" = "" ]; then
 	TARGET_PATH=$(find /lib/modules/$(uname -r)/kernel/drivers/net -name realtek -type d)

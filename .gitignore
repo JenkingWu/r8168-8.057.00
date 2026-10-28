@@ -1,0 +1,15 @@
+# kernel build artifacts
+*.o
+*.ko
+*.ko.unsigned
+*.mod
+*.mod.c
+*.cmd
+*.symvers
+*.order
+.tmp_versions/
+log.txt
+build-*.log
+
+# exported conversation log
+src/rtl8168_fix.md
